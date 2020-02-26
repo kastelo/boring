@@ -26,19 +26,22 @@ fn main() {
     let matches = App::new("bt")
         .version(env!("CARGO_PKG_VERSION"))
         .author("Daniel Lublin <d@lublin.se>")
-        .args(&[Arg::with_name("server")
-            .long("server")
-            .short("s")
-            .help("Run as server, not client")])
+        .args(&[Arg::with_name("endpoint")
+            .takes_value(true)
+            .value_name("HOST:PORT")
+            .long("endpoint")
+            .short("e")
+            .help("Connect to this \"server\"")])
         .get_matches();
-    let server = matches.is_present("server");
+    let endpoint = matches.is_present("endpoint");
 
-    let net_sock = if server {
+    let net_sock = if !endpoint {
         UdpSocket::bind("0.0.0.0:2121").unwrap()
     } else {
+        let hostport = matches.value_of("endpoint").unwrap();
         let sock = UdpSocket::bind("0.0.0.0:0").unwrap();
-        sock.connect(SERVER)
-            .unwrap_or_else(|e| panic!("connect {}: {}", SERVER, e));
+        sock.connect(hostport)
+            .unwrap_or_else(|e| panic!("connect {}: {}", hostport, e));
         sock
     };
 
@@ -54,31 +57,29 @@ fn main() {
         public: "/sx0Z0YvqP0Tazmxbi3YvfYMP4FQy3bYpANJFqiHjSs=",
     };
 
-    let peer_sock: UdpSocket;
-    if server {
-        peer_sock = wireguard_test_peer(
+    let peer_sock = if !endpoint {
+        wireguard_test_peer(
             net_sock,
             &server_pair.private,
             &client_pair.public,
             Box::new(|e: &str| eprintln!("server: {}", e)),
             close.clone(),
-        );
+        )
     } else {
-        peer_sock = wireguard_test_peer(
+        wireguard_test_peer(
             net_sock,
             &client_pair.private,
             &server_pair.public,
             Box::new(|e: &str| eprintln!("client: {}", e)),
             close.clone(),
-        );
-    }
+        )
+    };
 
-    if server {
+    if !endpoint {
         loop {
             let data = read_ipv4_packet(&peer_sock);
-            let data_string = str::from_utf8(&data).unwrap().to_uppercase();
-            eprintln!("sending back: {}", &data_string);
-            write_ipv4_packet(&peer_sock, &data_string.into_bytes());
+            eprintln!("sending back: {}", str::from_utf8(&data).unwrap());
+            write_ipv4_packet(&peer_sock, &data);
         }
     } else {
         peer_sock
@@ -88,18 +89,10 @@ fn main() {
             .set_write_timeout(Some(Duration::from_millis(1000)))
             .unwrap();
 
-        for _i in 0..64 {
-            write_ipv4_packet(&peer_sock, b"test");
-            let response = read_ipv4_packet(&peer_sock);
-            eprintln!("response: {}", str::from_utf8(&response).unwrap());
-            assert_eq!(&response, b"TEST");
-        }
-
-        for _i in 0..64 {
-            write_ipv4_packet(&peer_sock, b"check");
-            let response = read_ipv4_packet(&peer_sock);
-            eprintln!("response: {}", str::from_utf8(&response).unwrap());
-            assert_eq!(&response, b"CHECK");
+        for i in 0..64 {
+            write_ipv4_packet(&peer_sock, format!("number-{}", i).as_bytes());
+            let r = read_ipv4_packet(&peer_sock);
+            eprintln!("response: {}", str::from_utf8(&r).unwrap());
         }
     }
 
