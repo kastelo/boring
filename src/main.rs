@@ -15,31 +15,34 @@ struct KeyPair {
     public: &'static str,
 }
 
-// TODO
-// running client a second timed gives
-//     thread 'main' panicked at 'called `Result::unwrap()` on an `Err`
-//     value: Os { code: 11, kind: WouldBlock, message: "Resource
-//     temporarily unavailable" }', src/libcore/result.rs:1188:5
-// and no new output at all on the server
-
 fn main() {
     let matches = App::new("bt")
         .version(env!("CARGO_PKG_VERSION"))
         .author("Daniel Lublin <d@lublin.se>")
-        .args(&[Arg::with_name("endpoint")
-            .takes_value(true)
-            .value_name("HOST:PORT")
-            .long("endpoint")
-            .short("e")
-            .help("Connect to this \"server\"")])
+        .args(&[
+            Arg::with_name("listenport")
+                .takes_value(true)
+                .value_name("PORT")
+                .long("listen-port")
+                .short("l")
+                .help("Listen port for \"server\" (srcport for \"client\")")
+                .default_value("2121"),
+            Arg::with_name("endpoint")
+                .takes_value(true)
+                .value_name("HOST:PORT")
+                .long("endpoint")
+                .short("e")
+                .help("Connect to this \"server\""),
+        ])
         .get_matches();
     let endpoint = matches.is_present("endpoint");
+    let listenport = matches.value_of("listenport").unwrap();
 
     let net_sock = if !endpoint {
-        UdpSocket::bind("0.0.0.0:2121").unwrap()
+        UdpSocket::bind(format!("0.0.0.0:{}", listenport)).unwrap()
     } else {
         let hostport = matches.value_of("endpoint").unwrap();
-        let sock = UdpSocket::bind("0.0.0.0:0").unwrap();
+        let sock = UdpSocket::bind(format!("0.0.0.0:{}", listenport)).unwrap();
         sock.connect(hostport)
             .unwrap_or_else(|e| panic!("connect {}: {}", hostport, e));
         sock
