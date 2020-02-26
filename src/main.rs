@@ -14,9 +14,9 @@ struct KeyPair {
 }
 
 fn main() {
-    let matches = App::new("boring")
+    let matches = App::new(env!("CARGO_PKG_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
-        .author("Daniel Lublin <d@lublin.se>")
+        .author(env!("CARGO_PKG_AUTHORS"))
         .args(&[
             Arg::with_name("listenport")
                 .takes_value(true)
