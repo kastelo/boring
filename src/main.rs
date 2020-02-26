@@ -8,15 +8,13 @@ use std::thread;
 use std::time::Duration;
 const MAX_PACKET: usize = 65536;
 
-const SERVER: &str = "***REMOVED***:2121";
-
 struct KeyPair {
     private: &'static str,
     public: &'static str,
 }
 
 fn main() {
-    let matches = App::new("bt")
+    let matches = App::new("boring")
         .version(env!("CARGO_PKG_VERSION"))
         .author("Daniel Lublin <d@lublin.se>")
         .args(&[

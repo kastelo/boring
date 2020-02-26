@@ -1,5 +1,5 @@
 [package]
-name = "bt"
+name = "boring"
 version = "0.1.0"
 authors = ["Daniel Lublin <daniel@lublin.se>"]
 edition = "2018"
