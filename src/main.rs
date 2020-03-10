@@ -76,11 +76,12 @@ fn main() {
         )
     };
 
+    let mut data = [0u8; MAX_PACKET];
     if !endpoint {
         loop {
-            let data = read_ipv4_packet(&peer_sock);
-            eprintln!("sending back: {}", str::from_utf8(&data).unwrap());
-            write_ipv4_packet(&peer_sock, &data);
+            let len = peer_sock.recv(&mut data).unwrap();
+            eprintln!("sending back: {}", str::from_utf8(&data[..len]).unwrap());
+            peer_sock.send(&data[..len]).unwrap();
         }
     } else {
         peer_sock
@@ -91,9 +92,9 @@ fn main() {
             .unwrap();
 
         for i in 0..64 {
-            write_ipv4_packet(&peer_sock, format!("number-{}", i).as_bytes());
-            let r = read_ipv4_packet(&peer_sock);
-            eprintln!("response: {}", str::from_utf8(&r).unwrap());
+            peer_sock.send(format!("number-{}", i).as_bytes()).unwrap();
+            let len = peer_sock.recv(&mut data).unwrap();
+            eprintln!("response: {}", str::from_utf8(&data[..len]).unwrap());
         }
     }
 
@@ -188,11 +189,11 @@ fn wireguard_test_peer(
                 }
                 TunnResult::WriteToTunnelV4(packet, _) => {
                     network_socket.connect(src).unwrap();
-                    iface_socket.send(packet).unwrap();
+                    iface_socket.send(unwrap_from_ipv4(packet).as_slice()).unwrap();
                 }
                 TunnResult::WriteToTunnelV6(packet, _) => {
                     network_socket.connect(src).unwrap();
-                    iface_socket.send(packet).unwrap();
+                    iface_socket.send(unwrap_from_ipv4(packet).as_slice()).unwrap();
                 }
                 _ => {}
             }
@@ -220,7 +221,8 @@ fn wireguard_test_peer(
                 }
             };
 
-            match peer.encapsulate(&recv_buf[..n], &mut send_buf) {
+            let pkt = wrap_in_ipv4(&recv_buf[..n]);
+            match peer.encapsulate(pkt.as_slice(), &mut send_buf) {
                 TunnResult::WriteToNetwork(packet) => {
                     network_socket.send(packet).unwrap();
                 }
@@ -261,21 +263,8 @@ fn connected_sock_pair() -> (UdpSocket, UdpSocket) {
 
 const IPV4_MIN_HEADER_SIZE: usize = 20;
 const IPV4_LEN_OFF: usize = 2;
-// const IPV4_SRC_IP_OFF: usize = 12;
-// const IPV4_DST_IP_OFF: usize = 16;
-// const IPV4_IP_SZ: usize = 4;
 
-// Reads a decapsulated packet and strips its IPv4 header
-fn read_ipv4_packet(socket: &UdpSocket) -> Vec<u8> {
-    let mut data = [0u8; MAX_PACKET];
-    let mut packet = Vec::new();
-    let len = socket.recv(&mut data).unwrap();
-    packet.extend_from_slice(&data[IPV4_MIN_HEADER_SIZE..len]);
-    packet
-}
-
-// Appends an IPv4 header to a buffer and writes the resulting "packet"
-fn write_ipv4_packet(socket: &UdpSocket, data: &[u8]) {
+fn wrap_in_ipv4(data: &[u8]) -> Vec<u8> {
     let mut header = [0u8; IPV4_MIN_HEADER_SIZE];
     let mut packet = Vec::new();
     let packet_len = data.len() + header.len();
@@ -284,5 +273,11 @@ fn write_ipv4_packet(socket: &UdpSocket, data: &[u8]) {
     header[IPV4_LEN_OFF + 1] = packet_len as u8;
     packet.extend_from_slice(&header);
     packet.extend_from_slice(&data);
-    socket.send(&packet).unwrap();
+    packet
+}
+
+fn unwrap_from_ipv4(data: &[u8]) -> Vec<u8> {
+    let mut packet = Vec::new();
+    packet.extend_from_slice(&data[IPV4_MIN_HEADER_SIZE..]);
+    packet
 }
