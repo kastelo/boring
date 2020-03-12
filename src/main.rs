@@ -136,7 +136,13 @@ fn read_packet(
     dest_buf: &mut [u8],
     peer: &Tunn,
 ) -> Option<Vec<u8>> {
-    let (n, src) = net_sock.recv_from(recv_buf).unwrap();
+    let (n, src) = match net_sock.recv_from(recv_buf) {
+        Ok((n, src)) => (n, src),
+        Err(err) => {
+            eprintln!("recv_from: {:?}", err);
+            return None;
+        }
+    };
     match peer.decapsulate(None, &recv_buf[..n], dest_buf) {
         TunnResult::WriteToNetwork(packet) => {
             net_sock.connect(src).unwrap();
@@ -151,7 +157,8 @@ fn read_packet(
                         break;
                     }
                     TunnResult::Err(err) => {
-                        panic!(err);
+                        eprintln!("decapsulate(inner): {:?}", err);
+                        break;
                     }
                     _ => {
                         continue;
@@ -163,7 +170,8 @@ fn read_packet(
         TunnResult::WriteToTunnelV4(packet, _) => Some(unwrap_from_ipv4(packet)),
         TunnResult::WriteToTunnelV6(_, _) => None,
         TunnResult::Err(err) => {
-            panic!(err);
+            eprintln!("decapsulate: {:?}", err);
+            None
         }
         TunnResult::Done => None,
     }
