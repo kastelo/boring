@@ -1,8 +1,7 @@
-use boringtun::noise::{Tunn, TunnResult, Verbosity};
+use boringtun::noise::{Tunn, TunnResult};
 use clap::{App, Arg};
 use std::net::UdpSocket;
 use std::str;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -46,8 +45,6 @@ fn main() {
         sock
     };
 
-    let close = Arc::new(AtomicBool::new(false));
-
     let client_pair = KeyPair {
         private: "6FWqlhJJd4rCdamaRfjTxyVBllwCqwDiGDVf2PBqmEQ=",
         public: "AVbCPrafj2II/ZT3xOdSwWYNDYgTR9tdiNlKJ6Uvb3U=",
@@ -58,207 +55,133 @@ fn main() {
         public: "/sx0Z0YvqP0Tazmxbi3YvfYMP4FQy3bYpANJFqiHjSs=",
     };
 
-    let peer_sock = if !endpoint {
-        wireguard_test_peer(
-            net_sock,
-            &server_pair.private,
-            &client_pair.public,
-            Box::new(|e: &str| eprintln!("server: {}", e)),
-            close.clone(),
-        )
-    } else {
-        wireguard_test_peer(
-            net_sock,
-            &client_pair.private,
-            &server_pair.public,
-            Box::new(|e: &str| eprintln!("client: {}", e)),
-            close.clone(),
-        )
-    };
-
-    let mut data = [0u8; MAX_PACKET];
     if !endpoint {
-        loop {
-            let len = peer_sock.recv(&mut data).unwrap();
-            eprintln!("sending back: {}", str::from_utf8(&data[..len]).unwrap());
-            peer_sock.send(&data[..len]).unwrap();
-        }
-    } else {
-        peer_sock
-            .set_read_timeout(Some(Duration::from_millis(1000)))
-            .unwrap();
-        peer_sock
-            .set_write_timeout(Some(Duration::from_millis(1000)))
-            .unwrap();
-
-        for i in 0..64 {
-            peer_sock.send(format!("number-{}", i).as_bytes()).unwrap();
-            let len = peer_sock.recv(&mut data).unwrap();
-            eprintln!("response: {}", str::from_utf8(&data[..len]).unwrap());
-        }
+        // We're the echo side
+        let peer = Tunn::new(
+            Arc::new(server_pair.private.parse().unwrap()),
+            Arc::new(client_pair.public.parse().unwrap()),
+            None,
+            None,
+            100,
+            None,
+        )
+        .unwrap();
+        echo_loop(&net_sock, peer);
     }
 
-    close.store(true, Ordering::Relaxed);
-}
-
-// Simple counter, atomically increasing by one each call
-struct AtomicCounter {
-    ctr: AtomicUsize,
-}
-impl AtomicCounter {
-    pub fn next(&self) -> usize {
-        self.ctr.fetch_add(1, Ordering::Relaxed)
-    }
-}
-static NEXT_PORT: AtomicCounter = AtomicCounter {
-    ctr: AtomicUsize::new(30000),
-};
-
-// Start a WireGuard peer
-fn wireguard_test_peer(
-    network_socket: UdpSocket,
-    static_private: &str,
-    peer_static_public: &str,
-    logger: Box<dyn Fn(&str) + Send>,
-    close: Arc<AtomicBool>,
-) -> UdpSocket {
-    let static_private = static_private.parse().unwrap();
-    let peer_static_public = peer_static_public.parse().unwrap();
-
-    let mut peer = Tunn::new(
-        Arc::new(static_private),
-        Arc::new(peer_static_public),
+    // We're the sender
+    let peer = Tunn::new(
+        Arc::new(client_pair.private.parse().unwrap()),
+        Arc::new(server_pair.public.parse().unwrap()),
         None,
         None,
         100,
         None,
     )
     .unwrap();
-    peer.set_logger(logger, Verbosity::Debug);
-
-    let peer: Arc<Box<Tunn>> = Arc::from(peer);
-
-    let (iface_socket_ret, iface_socket) = connected_sock_pair();
-
-    network_socket
-        .set_read_timeout(Some(Duration::from_millis(1000)))
-        .unwrap();
-    iface_socket
-        .set_read_timeout(Some(Duration::from_millis(1000)))
-        .unwrap();
-
-    // The peer has three threads:
-    // 1) listens on the network for encapsulated packets and decapsulates them
-    {
-        let network_socket = network_socket.try_clone().unwrap();
-        let iface_socket = iface_socket.try_clone().unwrap();
-        let peer = peer.clone();
-        let close = close.clone();
-
-        thread::spawn(move || loop {
-            // Listen on the network
-            let mut recv_buf = [0u8; MAX_PACKET];
-            let mut send_buf = [0u8; MAX_PACKET];
-
-            let (n, src) = match network_socket.recv_from(&mut recv_buf) {
-                Ok((n, src)) => (n, src),
-                Err(_) => {
-                    if close.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    continue;
-                }
-            };
-
-            match peer.decapsulate(None, &recv_buf[..n], &mut send_buf) {
-                TunnResult::WriteToNetwork(packet) => {
-                    network_socket.connect(src).unwrap();
-                    network_socket.send(packet).unwrap();
-                    // Send form queue?
-                    loop {
-                        let mut send_buf = [0u8; MAX_PACKET];
-                        match peer.decapsulate(None, &[], &mut send_buf) {
-                            TunnResult::WriteToNetwork(packet) => {
-                                network_socket.send(packet).unwrap();
-                            }
-                            _ => {
-                                break;
-                            }
-                        }
-                    }
-                }
-                TunnResult::WriteToTunnelV4(packet, _) => {
-                    network_socket.connect(src).unwrap();
-                    iface_socket.send(unwrap_from_ipv4(packet).as_slice()).unwrap();
-                }
-                TunnResult::WriteToTunnelV6(packet, _) => {
-                    network_socket.connect(src).unwrap();
-                    iface_socket.send(unwrap_from_ipv4(packet).as_slice()).unwrap();
-                }
-                _ => {}
-            }
-        });
-    }
-
-    // 2) listens on the iface for raw packets and encapsulates them
-    {
-        let network_socket = network_socket.try_clone().unwrap();
-        let iface_socket = iface_socket.try_clone().unwrap();
-        let peer = peer.clone();
-        let close = close.clone();
-
-        thread::spawn(move || loop {
-            let mut recv_buf = [0u8; MAX_PACKET];
-            let mut send_buf = [0u8; MAX_PACKET];
-
-            let n = match iface_socket.recv(&mut recv_buf) {
-                Ok(n) => n,
-                Err(_) => {
-                    if close.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    continue;
-                }
-            };
-
-            let pkt = wrap_in_ipv4(&recv_buf[..n]);
-            match peer.encapsulate(pkt.as_slice(), &mut send_buf) {
-                TunnResult::WriteToNetwork(packet) => {
-                    network_socket.send(packet).unwrap();
-                }
-                _ => {}
-            }
-        });
-    }
-
-    // 3) times maintenance function responsible for state expiration
-    thread::spawn(move || loop {
-        if close.load(Ordering::Relaxed) {
-            return;
-        }
-
-        let mut send_buf = [0u8; MAX_PACKET];
-        match peer.update_timers(&mut send_buf) {
-            TunnResult::WriteToNetwork(packet) => {
-                network_socket.send(packet).unwrap();
-            }
-            _ => {}
-        }
-
-        thread::sleep(Duration::from_millis(200));
-    });
-
-    iface_socket_ret
+    sender_loop(&net_sock, peer);
 }
 
-fn connected_sock_pair() -> (UdpSocket, UdpSocket) {
-    let addr_a = format!("localhost:{}", NEXT_PORT.next());
-    let addr_b = format!("localhost:{}", NEXT_PORT.next());
-    let sock_a = UdpSocket::bind(&addr_a).unwrap();
-    let sock_b = UdpSocket::bind(&addr_b).unwrap();
-    sock_a.connect(&addr_b).unwrap();
-    sock_b.connect(&addr_a).unwrap();
-    (sock_a, sock_b)
+fn echo_loop(net_sock: &UdpSocket, peer: Box<boringtun::noise::Tunn>) {
+    let mut recv_buf = [0u8; MAX_PACKET];
+    let mut dest_buf = [0u8; MAX_PACKET];
+    loop {
+        match read_packet(&net_sock, &mut recv_buf, &mut dest_buf, &peer) {
+            Some(pkt) => {
+                let pkt_str = str::from_utf8(pkt.as_slice()).unwrap();
+                eprintln!("got packet: {}", pkt_str);
+
+                write_packet(&net_sock, pkt.as_slice(), &mut dest_buf, &peer);
+                eprintln!("sent response: {}", pkt_str);
+            }
+            None => {}
+        };
+    }
+}
+
+fn sender_loop(net_sock: &UdpSocket, peer: Box<boringtun::noise::Tunn>) {
+    let peer: Arc<Box<Tunn>> = Arc::from(peer);
+    {
+        let peer = peer.clone();
+        let net_sock = net_sock.try_clone().unwrap();
+        thread::spawn(move || {
+            let mut recv_buf = [0u8; MAX_PACKET];
+            let mut dest_buf = [0u8; MAX_PACKET];
+            loop {
+                match read_packet(&net_sock, &mut recv_buf, &mut dest_buf, &peer) {
+                    Some(pkt) => {
+                        eprintln!("got response: {}", str::from_utf8(pkt.as_slice()).unwrap());
+                    }
+                    None => {}
+                };
+            }
+        });
+    }
+
+    let mut i = 0;
+    let mut dest_buf = [0u8; MAX_PACKET];
+    loop {
+        let data = format!("number-{}", i);
+        write_packet(&net_sock, data.as_bytes(), &mut dest_buf, &peer);
+        eprintln!("sent packet: {}", data);
+
+        thread::sleep(Duration::from_millis(750));
+        i += 1;
+    }
+}
+
+fn read_packet(
+    net_sock: &UdpSocket,
+    recv_buf: &mut [u8],
+    dest_buf: &mut [u8],
+    peer: &boringtun::noise::Tunn,
+) -> Option<Vec<u8>> {
+    let (n, src) = net_sock.recv_from(recv_buf).unwrap();
+    match peer.decapsulate(None, &recv_buf[..n], dest_buf) {
+        TunnResult::WriteToNetwork(packet) => {
+            net_sock.connect(src).unwrap();
+            net_sock.send(packet).unwrap();
+            loop {
+                let mut send_buf = [0u8; MAX_PACKET];
+                match peer.decapsulate(None, &[], &mut send_buf) {
+                    TunnResult::WriteToNetwork(packet) => {
+                        net_sock.send(packet).unwrap();
+                    }
+                    TunnResult::Done => {
+                        break;
+                    }
+                    TunnResult::Err(err) => {
+                        panic!(err);
+                    }
+                    _ => {
+                        continue;
+                    }
+                }
+            }
+            None
+        }
+        TunnResult::WriteToTunnelV4(packet, _) => Some(unwrap_from_ipv4(packet)),
+        TunnResult::WriteToTunnelV6(_, _) => None,
+        TunnResult::Err(err) => {
+            panic!(err);
+        }
+        TunnResult::Done => None,
+    }
+}
+
+fn write_packet(
+    net_sock: &UdpSocket,
+    data: &[u8],
+    dest_buf: &mut [u8],
+    peer: &boringtun::noise::Tunn,
+) {
+    let pkt = wrap_in_ipv4(data);
+    match peer.encapsulate(pkt.as_slice(), dest_buf) {
+        TunnResult::WriteToNetwork(packet) => {
+            net_sock.send(packet).unwrap();
+        }
+        _ => {}
+    };
 }
 
 const IPV4_MIN_HEADER_SIZE: usize = 20;
