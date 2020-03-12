@@ -82,7 +82,7 @@ fn main() {
     sender_loop(&net_sock, peer);
 }
 
-fn echo_loop(net_sock: &UdpSocket, peer: Box<boringtun::noise::Tunn>) {
+fn echo_loop(net_sock: &UdpSocket, peer: Box<Tunn>) {
     let mut recv_buf = [0u8; MAX_PACKET];
     let mut dest_buf = [0u8; MAX_PACKET];
     loop {
@@ -99,7 +99,7 @@ fn echo_loop(net_sock: &UdpSocket, peer: Box<boringtun::noise::Tunn>) {
     }
 }
 
-fn sender_loop(net_sock: &UdpSocket, peer: Box<boringtun::noise::Tunn>) {
+fn sender_loop(net_sock: &UdpSocket, peer: Box<Tunn>) {
     let peer: Arc<Box<Tunn>> = Arc::from(peer);
     {
         let peer = peer.clone();
@@ -134,7 +134,7 @@ fn read_packet(
     net_sock: &UdpSocket,
     recv_buf: &mut [u8],
     dest_buf: &mut [u8],
-    peer: &boringtun::noise::Tunn,
+    peer: &Tunn,
 ) -> Option<Vec<u8>> {
     let (n, src) = net_sock.recv_from(recv_buf).unwrap();
     match peer.decapsulate(None, &recv_buf[..n], dest_buf) {
@@ -169,12 +169,7 @@ fn read_packet(
     }
 }
 
-fn write_packet(
-    net_sock: &UdpSocket,
-    data: &[u8],
-    dest_buf: &mut [u8],
-    peer: &boringtun::noise::Tunn,
-) {
+fn write_packet(net_sock: &UdpSocket, data: &[u8], dest_buf: &mut [u8], peer: &Tunn) {
     let pkt = wrap_in_ipv4(data);
     match peer.encapsulate(pkt.as_slice(), dest_buf) {
         TunnResult::WriteToNetwork(packet) => {
