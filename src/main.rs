@@ -85,13 +85,14 @@ fn main() {
 fn echo_loop(net_sock: &UdpSocket, peer: Box<Tunn>) {
     let mut recv_buf = [0u8; MAX_PACKET];
     let mut dest_buf = [0u8; MAX_PACKET];
+    let mut dest2_buf = [0u8; MAX_PACKET];
     loop {
         match read_packet(&net_sock, &mut recv_buf, &mut dest_buf, &peer) {
             Some(pkt) => {
-                let pkt_str = str::from_utf8(pkt.as_slice()).unwrap();
+                let pkt_str = str::from_utf8(pkt).unwrap();
                 eprintln!("got packet: {}", pkt_str);
 
-                write_packet(&net_sock, pkt.as_slice(), &mut dest_buf, &peer);
+                write_packet(&net_sock, pkt, &mut dest2_buf, &peer);
                 eprintln!("sent response: {}", pkt_str);
             }
             None => {}
@@ -110,7 +111,7 @@ fn sender_loop(net_sock: &UdpSocket, peer: Box<Tunn>) {
             loop {
                 match read_packet(&net_sock, &mut recv_buf, &mut dest_buf, &peer) {
                     Some(pkt) => {
-                        eprintln!("got response: {}", str::from_utf8(pkt.as_slice()).unwrap());
+                        eprintln!("got response: {}", str::from_utf8(pkt).unwrap());
                     }
                     None => {}
                 };
@@ -130,12 +131,12 @@ fn sender_loop(net_sock: &UdpSocket, peer: Box<Tunn>) {
     }
 }
 
-fn read_packet(
+fn read_packet<'a>(
     net_sock: &UdpSocket,
     recv_buf: &mut [u8],
-    dest_buf: &mut [u8],
+    dest_buf: &'a mut [u8],
     peer: &Tunn,
-) -> Option<Vec<u8>> {
+) -> Option<&'a [u8]> {
     let (n, src) = match net_sock.recv_from(recv_buf) {
         Ok((n, src)) => (n, src),
         Err(err) => {
@@ -167,7 +168,7 @@ fn read_packet(
             }
             None
         }
-        TunnResult::WriteToTunnelV4(packet, _) => Some(unwrap_from_ipv4(packet)),
+        TunnResult::WriteToTunnelV4(packet, _) => Some(packet),
         TunnResult::WriteToTunnelV6(_, _) => None,
         TunnResult::Err(err) => {
             eprintln!("decapsulate: {:?}", err);
@@ -178,32 +179,10 @@ fn read_packet(
 }
 
 fn write_packet(net_sock: &UdpSocket, data: &[u8], dest_buf: &mut [u8], peer: &Tunn) {
-    let pkt = wrap_in_ipv4(data);
-    match peer.encapsulate(pkt.as_slice(), dest_buf) {
+    match peer.encapsulate(data, dest_buf) {
         TunnResult::WriteToNetwork(packet) => {
             net_sock.send(packet).unwrap();
         }
         _ => {}
     };
-}
-
-const IPV4_MIN_HEADER_SIZE: usize = 20;
-const IPV4_LEN_OFF: usize = 2;
-
-fn wrap_in_ipv4(data: &[u8]) -> Vec<u8> {
-    let mut header = [0u8; IPV4_MIN_HEADER_SIZE];
-    let mut packet = Vec::new();
-    let packet_len = data.len() + header.len();
-    header[0] = 4 << 4;
-    header[IPV4_LEN_OFF] = (packet_len >> 8) as u8;
-    header[IPV4_LEN_OFF + 1] = packet_len as u8;
-    packet.extend_from_slice(&header);
-    packet.extend_from_slice(&data);
-    packet
-}
-
-fn unwrap_from_ipv4(data: &[u8]) -> Vec<u8> {
-    let mut packet = Vec::new();
-    packet.extend_from_slice(&data[IPV4_MIN_HEADER_SIZE..]);
-    packet
 }

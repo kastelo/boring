@@ -87,7 +87,7 @@ dependencies = [
 [[package]]
 name = "boringtun"
 version = "0.3.0"
-source = "git+https://github.com/cloudflare/boringtun#700f20bf2a060953911c998c02dea821a43c09ca"
+source = "git+https://github.com/kastelo/boringtun#6f0e55dccc042a7ec9297c45f9120290140b9d02"
 dependencies = [
  "base64",
  "chrono",
